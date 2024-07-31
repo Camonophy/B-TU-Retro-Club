@@ -1,2 +1,6 @@
 # B-TU-Retro-Club
-All projects administrated by the Retro-Club of the B-TU Cottbus
+
+## Gameboy Example
+
+A project to get familiar with programming for the Nintendo Gameboy.
+<a href="https://github.com/Camonophy/GameboyExample">Link to the repository</a>
