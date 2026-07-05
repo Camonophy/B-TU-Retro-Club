@@ -20,6 +20,14 @@ class Listing:
     # uses this to write the "Aktueller Wert (€)" column as a pure
     # number instead of the raw "215.000 € VB 265.000 €" string.
     price_eur: Optional[float] = None
+    # Numeric "previous price" in EUR: the higher of two values when
+    # the search-card price cell shows a pair like "215.000 € VB
+    # 265.000 €" or "550 € 700 €". None for single-price cells
+    # ("184.500 €", "1 €") — the user explicitly does not want a
+    # repeated value in a separate column when there was no previous
+    # price. Surfaced as the "Vorheriger Wert (€)" spreadsheet column.
+    # Set by _parse_listing_card via parse_price_pair_eur().
+    previous_price_eur: Optional[float] = None
     location: Optional[str] = None
     date_posted: Optional[str] = None
     date_parsed: Optional[datetime] = None
@@ -63,6 +71,13 @@ class Listing:
             "Postleitzahl": self.postleitzahl or "",
             "Seller Name": self.seller_name or "",
         }
+
+    # Note: Listing.to_dict() intentionally does NOT include
+    # previous_price_eur — the dict's column set is frozen at the
+    # old per-Bundesland exporter's shape. The global-accumulator
+    # exporter reads previous_price_eur directly off the Listing via
+    # _listing_row(); if a future caller wires to_dict() into the
+    # exporter path, add previous_price_eur here too.
 
 
 @dataclass

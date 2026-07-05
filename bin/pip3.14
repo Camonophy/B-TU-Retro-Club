@@ -1,4 +1,4 @@
-#!/root/nextcloud/ImmoRetterApp/bin/python3
+#!/root/nextcloud2/ImmoRetterApp/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys

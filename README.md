@@ -129,12 +129,12 @@ The scraper deliberately ignores the seller's "Aktiv seit" date in the user prof
 ### Phase 5: Filter and Export
 
 - Filter listings where `age_days > 90`.
-- Apply two additional content filters to every search card before it is added to the dataset (see [scraper/utils.py](scraper/utils.py)): 
+- Apply one additional content filter to every search card before it is added to the dataset (see [scraper/utils.py](scraper/utils.py)):
   - **For-sale only.** Titles matching wanted-listing signals (`Suche`, `Gesucht`, `Bewerber`, `Tausch`, …) are dropped. Titles matching sell signals (`zu verkaufen`, `zu vermieten`, `biete`, …) are kept. Ambiguous titles are kept by default.
-  - **Price rule.** Listings whose price is missing OR whose only price signal is `VB` (Verhandlungsbasis) AND the lowest numeric price parsed is `< 1000 €` are dropped. Two-price ranges like `"43.900 € VB 59.000 €"` use the lower bound. `"550 € 700 €"` (no VB) is kept.
-- Export to the single fixed `data/output/Global_real_estate_old_listings.xlsx` (sheet `Global Old Listings`, truncated to Excel's 31-char limit) plus a `Summary` sheet. The global file accumulates listings across every run and every Bundesland — listings already present (matched by URL) are skipped, only newly discovered URLs are appended. The `Aktueller Wert (€)` column contains a comma-separated integer (e.g. `25,000`) — no `€`, no `VB`; rows with no parsable price have an empty cell.
+  - **Price floor.** Listings whose lowest numeric price is ≤ `Settings.MIN_PRICE_EUR` (100 000 €) are dropped, regardless of whether the price cell contains `VB` or not. Two-price ranges like `"100.001 € VB 200.000 €"` use the lower bound; here the lower bound is above the floor so the listing is kept. `"80.000 € VB 180.000 €"` is dropped because the lower bound (80 000) is at or below the floor. Listings with no parsable price are also dropped. This rule effectively empties `c203` (Mietwohnung) because apartment rents are monthly and never reach 100 000 € on the listing side — if rent listings are wanted, lower the floor or split the rule per category.
+- Export to the single fixed `data/output/Global_real_estate_old_listings.xlsx` (sheet `Global Old Listings`, truncated to Excel's 31-char limit) plus a `Summary` sheet. The global file accumulates listings across every run and every Bundesland — listings already present (matched by URL) are skipped, only newly discovered URLs are appended. The `Aktueller Wert (€)` column contains a comma-separated integer (e.g. `25,000`) — no `€`, no `VB`; rows with no parsable price have an empty cell. When the search-card price cell shows TWO numbers (e.g. `"215.000 € VB 265.000 €"` or `"550 € 700 €"`) the higher one is written into a separate last column called `Vorheriger Wert (€)`; single-price cells leave that column empty (no repeated value). Rows are written sorted by activation date ASCENDING (= oldest-online listing first = largest age first = "descending by time since online" in the user's words) — sort happens client-side because Kleinanzeigen's date sort returns newest-first, opposite of what we want. Empty / unparseable activation date sorts to the end so dated rows stay grouped at the top.
 
-If no listings match the age filter, the file is **not** silently written with all listings under a misleading name — the script prints a clear "No listings older than 3 months found" message and tells you to re-run with `--all` if you want everything.
+If no listings are found at all (scraper returned 0 results), the file is still written with just the header + Summary sheet so subsequent runs have a baseline to dedup against.
 
 ## Features
 
@@ -143,7 +143,7 @@ If no listings match the age filter, the file is **not** silently written with a
 - Modern URL scheme with `locationId` so the search is actually scoped to the requested state
 - Activation-date extraction from listing detail pages (calendar icon in `viewad-extra-info`)
 - Proper handling of German relative date strings ("Heute", "vor 2 Monaten", etc.) and absolute dates ("24.06.2026")
-- 11-column Excel export with Title, URL, Price, Location, Date Posted, Age (Days), Older than 3 months flag
+- 7-column Excel export with Postleitzahl, Seller, Standort, Aktueller Wert (€), Datum seit online, Link, Vorheriger Wert (€) (the last column is populated only when the search-card price cell shows two prices)
 - Summary sheet with per-run statistics
 - Random delay between requests (default 2-4 s) and rotating User-Agent
 - Fallback from `lxml` to Python's built-in `html.parser` if lxml is unavailable
@@ -184,7 +184,8 @@ You can tweak these in `config/settings.py`:
 | `MAX_RETRIES`               | `3`        | HTTP retries on transient errors                                           |
 | `MAX_LISTINGS_FOR_DATES`    | `None`     | Optional cap on how many detail-page date fetches are made (None = no cap) |
 | `MIN_AGE_DAYS`              | `90`       | Listings whose activation date is older than this are exported             |
-| `REAL_ESTATE_SUBCATEGORIES` | 11 slugs | Which subcategories to scrape                                              |
+| `MIN_PRICE_EUR`             | `100000`   | Listings whose lowest numeric price is at or below this floor are dropped |
+| `REAL_ESTATE_SUBCATEGORIES` | 5 codes    | Which subcategories to scrape (c196, c198, c203, c207, c208)              |
 
 ### Tuning for Faster Runs
 

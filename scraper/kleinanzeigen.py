@@ -26,6 +26,7 @@ from .utils import (
     build_subcategory_url,
     fetch_sub_locations,
     parse_price_eur,
+    parse_price_pair_eur,
     is_for_sale_listing,
     is_excluded_by_price,
 )
@@ -195,10 +196,16 @@ class KleinanzeigenScraper:
                 )
                 return None
 
-            # Parse the price into a structured number so the exporter
-            # can write it as a pure integer (no "€", no "VB").
-            price_value, _has_vb = parse_price_eur(price)
-            price_eur = float(price_value) if price_value is not None else None
+            # Parse the price into structured numbers so the exporter can write
+            # them as pure integers (no "€", no "VB"). Use the pair
+            # variant so the second number (when present) becomes
+            # `previous_price_eur` for the new "Vorheriger Wert (€)"
+            # column. Single-price cells keep previous_price_eur=None.
+            lower_value, higher_value, _has_vb = parse_price_pair_eur(price)
+            price_eur = float(lower_value) if lower_value is not None else None
+            previous_price_eur = (
+                float(higher_value) if higher_value is not None else None
+            )
 
             # ---- Location ----
             loc_el = card.select_one(".aditem-main--top--left") \
@@ -275,6 +282,7 @@ class KleinanzeigenScraper:
                 url=url,
                 price=price,
                 price_eur=price_eur,
+                previous_price_eur=previous_price_eur,
                 location=location,
                 date_posted=date_posted,
                 date_parsed=date_parsed,

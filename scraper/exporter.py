@@ -28,6 +28,48 @@ def _safe_sheet_name(name: str) -> str:
     return safe
 
 
+# ---------------------------------------------------------------------------
+# Sort order
+# ---------------------------------------------------------------------------
+# Listings are exported ordered by activation date ascending — i.e.
+# the OLDEST-online listing comes first (largest age in days).
+# Equivalently: sort descending by "time since online". The user's
+# domain is "find neglected inventory", so the longest-online listings
+# at the top of the spreadsheet are the most useful.
+# Per user request 2026-07-03 (sort descending by Datum seit online).
+#
+# Previously the order was (PLZ asc, date asc). The PLZ primary key
+# is gone now because the user wants the sort driven by age, not
+# geography. Empty / missing activation date sorts LAST so dated
+# rows stay grouped at the top.
+#
+# Sort is purely client-side because Kleinanzeigen has no
+# age-descending URL parameter (sortingField=SORTING_DATE is
+# newest-first — opposite of what we want, so we re-sort after
+# collection).
+#
+# Implementation note: we sort on `date_parsed` ASCENDING (smallest
+# date = oldest = first). This avoids recomputing "days since" on
+# every sort call, which would make the sort non-deterministic across
+# runs that happen to straddle midnight.
+def _sort_listings(listings: List) -> List:
+    """Return a NEW list sorted by activation date ASCENDING.
+
+    Oldest date first (largest age first). Pure function. Does not
+    mutate the input list. Stable sort: when two rows tie on date the
+    original input order is preserved. Missing date sorts to the end.
+    """
+    def _key(L):
+        # Two-tuple: (group, sort_value). Group 0 = dated, group 1 =
+        # missing. Ascending sort puts group 0 before group 1, then
+        # within group 0 sorts by date ascending (oldest first).
+        if L.date_parsed is None:
+            return (1, None)
+        return (0, L.date_parsed)
+
+    return sorted(listings, key=_key)
+
+
 class ExcelExporter:
     """Export scrape results to Excel."""
 
@@ -80,6 +122,9 @@ class ExcelExporter:
     # ------------------------------------------------------------------
     # The "data" columns of the spreadsheet. Defined as a class attribute
     # so other helpers (e.g. the row reader) can refer to the same list.
+    # "Vorheriger Wert (€)" is the LAST column (added 2026-07-03 per
+    # user request): when the search card shows two prices, this cell
+    # holds the higher one. Single-price cells leave this empty.
     GLOBAL_COLUMNS = [
         "Postleitzahl",
         "Name des Verkäufers",
@@ -87,10 +132,11 @@ class ExcelExporter:
         "Aktueller Wert (€)",
         "Datum seit online",
         "Link",
+        "Vorheriger Wert (€)",
     ]
 
     def export_global(self, result: ScrapeResult,
-                      write_all: bool = False) -> Optional[str]:
+                      write_all: bool = True) -> Optional[str]:
         """
         Append this run's listings to the global xlsx.
 
@@ -100,11 +146,15 @@ class ExcelExporter:
 
         Args:
             result: The ScrapeResult from a run.
-            write_all: If True, write every listing from the run
-                (including <90-day-old ones). If False, write only
-                listings whose activation date is older than
-                MIN_AGE_DAYS. When there are no old listings and
-                ``write_all`` is False, this method returns None.
+            write_all: If True (the default, effective 2026-07-03),
+                write every listing from the run regardless of age.
+                If False (legacy behaviour, kept for backward compat),
+                write only listings whose activation date is older
+                than MIN_AGE_DAYS. The file is always written as long
+                as we have something to record — even when zero new
+                rows survive dedup, the workbook is recreated with
+                just the header + Summary sheet so subsequent runs
+                have a baseline to compare against.
 
         Layout (matches the per-Bundesland exporter):
           Row 1       Header
@@ -118,9 +168,14 @@ class ExcelExporter:
         else:
             listings_to_write = result.get_old_listings()
 
-        if not listings_to_write:
-            return None
-
+        # Always write the file, even when listings_to_write is empty
+        # (e.g. on a fresh run where zero URLs survived, or when the
+        # scraper itself returned an empty result). The point is to
+        # create the baseline xlsx with header + Summary so subsequent
+        # runs have something to dedup against. Per user request
+        # 2026-07-03: "The next execution of this program should find
+        # all listings as if it is executed the first time ever. Then
+        # it should write alle findings in a apropriate excel file."
         filepath = self.settings.OUTPUT_DIR / self.settings.GLOBAL_FILENAME
         existing_rows, existing_urls = self._read_global_rows(filepath)
 
@@ -185,6 +240,12 @@ class ExcelExporter:
             "Link",
         ]
 
+        # Sort the listings by PLZ then date so the spreadsheet reads
+        # in a stable, geographic order (per user request 2026-07-03).
+        # Sort happens on the Listing objects (so date_parsed is
+        # available as a datetime), not on the row dicts.
+        listings = _sort_listings(listings)
+
         rows = []
         for listing in listings:
             rows.append(self._listing_row(listing))
@@ -246,6 +307,13 @@ class ExcelExporter:
             price_cell = f"{int(listing.price_eur):,}"
         else:
             price_cell = ""
+        # Previous (higher) price for two-price cells. Empty when there
+        # is no second number, per user spec 2026-07-03 — a single-price
+        # listing does NOT get the same value repeated in two columns.
+        if listing.previous_price_eur is not None:
+            previous_cell = f"{int(listing.previous_price_eur):,}"
+        else:
+            previous_cell = ""
         return {
             "Postleitzahl":       listing.postleitzahl or "",
             "Name des Verkäufers":listing.seller_name or "",
@@ -253,7 +321,31 @@ class ExcelExporter:
             "Aktueller Wert (€)": price_cell,
             "Datum seit online":  listing.date_posted or "",
             "Link":               listing.url or "",
+            "Vorheriger Wert (€)":previous_cell,
         }
+
+    @staticmethod
+    def _row_sort_key(row: dict) -> tuple:
+        """Sort key for a row dict in the merged-global path.
+
+        Sort by activation date ASCENDING (oldest first = largest age
+        first = "descending by time since online" in the user's
+        vocabulary). Mirrors _sort_listings() but operates on the
+        row-dict shape so the merged-existing-and-new sort in
+        _write_global_xlsx works without re-reading the file.
+
+        Unparseable or missing dates sort to the end so dated rows
+        stay grouped at the top.
+        """
+        date_str = (row.get("Datum seit online") or "").strip()
+        if not date_str:
+            return (1, None)
+        try:
+            # DD.MM.YYYY format used by the spreadsheet.
+            d = datetime.strptime(date_str, "%d.%m.%Y")
+            return (0, d)
+        except ValueError:
+            return (1, None)
 
     def _read_global_rows(self, filepath: Path) -> tuple[List[dict], set]:
         """Read the existing global xlsx and return (rows, urls).
@@ -328,6 +420,12 @@ class ExcelExporter:
         marker_row = dict(empty_row)
         marker_row["Datum seit online"] = today_str
 
+        # Sort the merged row dicts by PLZ ascending, then by activation
+        # date ascending. Empty PLZ sorts last; empty date sorts last
+        # within its PLZ group. The cell values are strings in the
+        # merged-dict representation so we re-parse DD.MM.YYYY here.
+        rows = sorted(rows, key=self._row_sort_key)
+
         all_rows = list(rows) + [empty_row, marker_row]
         df = pd.DataFrame(all_rows, columns=self.GLOBAL_COLUMNS)
 
@@ -355,7 +453,7 @@ class ExcelExporter:
 # ----------------------------------------------------------------------
 # Module-level helper
 # ----------------------------------------------------------------------
-def export_to_excel(result: ScrapeResult, allow_all_fallback: bool = False) -> Optional[str]:
+def export_to_excel(result: ScrapeResult, allow_all_fallback: bool = True) -> Optional[str]:
     """
     Convenience export function.
 
@@ -371,8 +469,12 @@ def export_to_excel(result: ScrapeResult, allow_all_fallback: bool = False) -> O
     ``ExcelExporter()`` directly if you need them.
 
     ``allow_all_fallback`` is honoured the same way it was before:
-    if True (i.e. ``--all`` on the CLI), the global file receives
-    *every* listing from the run, not just the >90-day ones.
+    if True (the default, effective 2026-07-03), the global file
+    receives *every* listing from the run, regardless of age. If
+    False (legacy behaviour), only listings older than
+    ``Settings.MIN_AGE_DAYS`` are written. The file is ALWAYS
+    written — even when zero listings qualify — so subsequent runs
+    always have a baseline xlsx to dedup against.
     """
     exporter = ExcelExporter()
     return exporter.export_global(result, write_all=allow_all_fallback)

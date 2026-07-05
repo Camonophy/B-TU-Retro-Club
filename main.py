@@ -133,9 +133,12 @@ def run_scrape(bundesland: str, export_all: bool = False,
         return None
 
     # Decide what to export. The single global xlsx is the only
-    # output — see ExcelExporter.export_global(). With --all we
-    # write every listing from the run; otherwise we write only
-    # listings whose activation date is older than MIN_AGE_DAYS.
+    # output — see ExcelExporter.export_global(). Effective 2026-07-03
+    # the default is "write every listing found" so the file is always
+    # created, even when the result set is empty (e.g. fresh run with
+    # nothing yet). The 100k price floor still applies at parse time
+    # so sub-100k listings never reach this code path. The --all flag
+    # remains accepted for backward compat but is now redundant.
     filepath = export_to_excel(result, allow_all_fallback=export_all)
 
     if use_ui:
@@ -160,21 +163,19 @@ def run_scrape(bundesland: str, export_all: bool = False,
             print(f"  Skipped (duplicate)  : {result.duplicate_global_rows}")
 
     if filepath:
-        kind = "all listings" if export_all else "old listings only"
-        msg = f"Exported ({kind}) to: {filepath}"
+        msg = f"Exported to: {filepath}"
         if use_ui:
             ui.console.ok(msg)
         else:
             print(f"\n{msg}")
     else:
-        if export_all:
-            msg = "No listings to export."
-        else:
-            msg = ("No listings older than 3 months found.\n"
-                   "(Re-run with --all to export every listing "
-                   "regardless of age.)")
+        # Only reachable if the writer itself raises (file system
+        # error, openpyxl IllegalCharacterError, etc.). Per user
+        # request 2026-07-03, the file is now always written on a
+        # successful run, even with zero new rows.
+        msg = "Export failed (see log)."
         if use_ui:
-            ui.console.warn(msg)
+            ui.console.err(msg)
         else:
             print(f"\n{msg}")
 

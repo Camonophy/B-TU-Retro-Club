@@ -73,6 +73,20 @@ class Settings:
     # Date filtering
     MIN_AGE_DAYS = 90  # Listings older than this will be included
 
+    # Price filtering
+    # Keep only listings whose lowest numeric price is strictly above
+    # this floor (EUR). VB or no VB, anything at or below is dropped.
+    # Effective since 2026-07-03 per user request — the prior rule
+    # ("VB + < 1000 €" or missing) let cheap fixtures and €1 placeholders
+    # into the export, which the user did not want.
+    # Effective 2026-07-03: lowered from 150 000 to 100 000 per user
+    # request ("Filter to only collect listings that have price > 100000").
+    # NOTE: this floor still effectively empties c203 (Mietwohnung)
+    # because apartment rents are monthly and never reach 100 000 €
+    # on the listing side. If rent listings are wanted, lower the
+    # floor further or split the rule per category.
+    MIN_PRICE_EUR = 100000
+
     # Excel output
     EXCEL_FILENAME_TEMPLATE = "{bundesland}_real_estate_old_listings_{timestamp}.xlsx"
     EXCEL_DATE_FORMAT = "%Y-%m-%d_%H-%M-%S"

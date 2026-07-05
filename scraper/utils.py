@@ -397,6 +397,37 @@ def parse_price_eur(price_str: Optional[str]) -> tuple[Optional[int], bool]:
     return min(nums), has_vb
 
 
+def parse_price_pair_eur(price_str: Optional[str]) -> tuple[Optional[int], Optional[int], bool]:
+    """Parse a Kleinanzeigen price string into (lower, higher, has_vb).
+
+    - `lower`: the lowest number in the cell (same as parse_price_eur[0]).
+    - `higher`: the highest number in the cell, or None if there is only
+      one number. Used to populate the "Vorheriger Wert (€)" column when
+      the search card shows two prices (e.g. "215.000 € VB 265.000 €" or
+      "550 € 700 €"). Per user spec 2026-07-03: when there was no
+      previous price, the cell is empty (None), NOT a repeated value.
+    - `has_vb`: True iff "VB" appears in the string.
+
+    Examples (matches the user's spec):
+      "184.500 €"             -> (184500, None, False)   single price
+      "1 €"                   -> (1,     None, False)   single price
+      "215.000 € VB 265.000 €"-> (215000, 265000, True)  two prices with VB
+      "43.900 € VB 59.000 €"  -> (43900,  59000,  True)  two prices with VB
+      "550 € 700 €"           -> (550,    700,    False) two prices no VB
+      "VB"                    -> (None,   None,   True)  VB alone
+      None / ""               -> (None,   None,   False) missing
+    """
+    if not price_str:
+        return None, None, False
+    has_vb = bool(re.search(r"\bvb\b", price_str, flags=re.IGNORECASE))
+    nums = _extract_price_numbers(price_str)
+    if not nums:
+        return None, None, has_vb
+    if len(nums) == 1:
+        return nums[0], None, has_vb
+    return min(nums), max(nums), has_vb
+
+
 # ---------------------------------------------------------------------------
 # "For sale" detection
 # ---------------------------------------------------------------------------
@@ -448,27 +479,41 @@ def is_for_sale_listing(title: str) -> bool:
             return False
     return True
 
-
-def is_excluded_by_price(price_str: Optional[str]) -> bool:
-    """Return True if the listing must be excluded by the price rule.
-
-    Exclusion rules (per user specification):
-      * No price present at all → exclude.
-      * "VB" present AND the lowest numeric price is < 1000 € → exclude.
-      * "VB" present with no number → exclude (same as no price).
-      * Two prices like "43.900 € VB 59.000 €" → use the LOWER (43.900).
-      * Two prices without VB like "550 € 700 €" → use the LOWER (550)
-        and exclude (550 < 1000 and VB is irrelevant because the rule
-        only mentions "VB and less than 1000€"; for two-price ranges
-        without VB we keep the listing, since the seller has stated a
-        real range that includes 700).
+def is_excluded_by_price(price_str: Optional[str],
+                         min_price_eur: Optional[int] = None) -> bool:
     """
+    Return True if the listing must be excluded by the price rule.
+
+    Rule (as of 2026-07-03, per user request): keep only listings whose
+    lowest numeric price is strictly above ``min_price_eur`` EUR.
+    Anything at or below that floor — VB or no VB — is dropped, as is
+    any listing whose price cell is missing or unparseable.
+
+    ``min_price_eur`` defaults to ``Settings.MIN_PRICE_EUR`` (150 000)
+    when not passed. The caller in ``_parse_listing_card`` does not pass
+    it, so production behaviour follows ``Settings.MIN_PRICE_EUR``.
+    Tests pass a small value (e.g. 100) to exercise boundary cases
+    without depending on a real >150 000 € fixture.
+
+    Notes on the rule:
+      * No price present at all → exclude.
+      * "VB" present with no number → exclude (same as no price).
+      * Two prices like "150.001 € VB 200.000 €" → use the LOWER
+        (150.001) and keep (above 150 000).
+      * Two prices like "120.000 € VB 180.000 €" → use the LOWER
+        (120.000) and exclude (≤ 150 000).
+      * "1 €" with no VB → exclude (1 ≤ 150 000). This is intentional:
+        the user explicitly wants sub-floor listings removed whether
+        or not VB is present.
+    """
+    if min_price_eur is None:
+        min_price_eur = Settings.MIN_PRICE_EUR
     if not price_str or not price_str.strip():
         return True
-    value, has_vb = parse_price_eur(price_str)
+    value, _has_vb = parse_price_eur(price_str)
     if value is None:
         return True           # missing or unparseable price
-    if has_vb and value < 1000:
+    if value <= min_price_eur:
         return True
     return False
 

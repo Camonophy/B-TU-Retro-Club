@@ -33,7 +33,7 @@ end
 # Unset irrelevant variables.
 deactivate nondestructive
 
-set -gx VIRTUAL_ENV /root/nextcloud/ImmoRetterApp
+set -gx VIRTUAL_ENV /root/nextcloud2/ImmoRetterApp
 
 set -gx _OLD_VIRTUAL_PATH $PATH
 set -gx PATH "$VIRTUAL_ENV/"bin $PATH
